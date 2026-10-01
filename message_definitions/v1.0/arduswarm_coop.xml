@@ -1,0 +1,143 @@
+<?xml version="1.0"?>
+<!--
+  arduswarm_coop: the cooperative-estimation link between the ArduPilot FC (Crazyflie 2.1,
+  STM32F405) and the Teensy 4.0 companion, and the critical peer message on the nRF51822
+  mesh (AP_SwarmMesh). Design and rationale: embedded/ardupilot/required_changes.md and
+  docs/plans/p5_embedded_plan.md.
+
+  Conventions
+  - Every time is FC microseconds (AP_HAL::micros64). Until the mesh clock sync exists
+    (required_changes.md, section 5) all vehicles are assumed to share this time base.
+  - Numeric fields are float32 on the wire (the companion widens them to double). Times are
+    uint64 or float32 offsets from a uint64 anchor, so no precision is lost.
+  - Covariances are sent as their upper triangle, row by row.
+  - Frames stay below the mesh limit: 251 B nRF51822 broadcast - 23 B SwarmMesh header
+    = 228 B for one MAVLink2 frame (10 B header + payload + 2 B CRC, unsigned).
+  - IDs 42600-42619 are unused in the fork's message_definitions (checked 27 Sep 2026;
+    ardupilotmega's includes use 42000-42001, 50001-50005, 52000-52001, 60000+).
+    42610-42619 are reserved for the mesh clock sync.
+-->
+<mavlink>
+  <!-- mavlink ID range 42600 - 42619 (42610 - 42619 reserved for the mesh clock sync).
+       Included from ardupilotmega.xml in the fork, like cubepilot.xml. -->
+  <include>common.xml</include>
+  <enums>
+    <enum name="COOP_SAMPLE_FLAGS" bitmask="true">
+      <description>Per-reading status bits set by the FC. The companion applies the gates.</description>
+      <entry value="1" name="COOP_SAMPLE_VALID">
+        <description>The driver reported a usable reading (sensor-specific status is also sent where it exists).</description>
+      </entry>
+      <entry value="2" name="COOP_SAMPLE_CLIPPED">
+        <description>IMU: at least one accelerometer or gyro sample in the interval was clipped.</description>
+      </entry>
+      <entry value="4" name="COOP_SAMPLE_GAP">
+        <description>IMU: samples were missing inside the interval (the increment is still contiguous in time).</description>
+      </entry>
+      <entry value="8" name="COOP_SAMPLE_POWER_VALID">
+        <description>UWB: rx_power and first_path_power were read from the DW1000.</description>
+      </entry>
+    </enum>
+    <enum name="COOP_PEER_FLAGS" bitmask="true">
+      <entry value="1" name="COOP_PEER_CRITICAL">
+        <description>Send in the critical mesh class (ahead of all telemetry). Set on every cooperative estimator message.</description>
+      </entry>
+      <entry value="2" name="COOP_PEER_ACK_REQUESTED">
+        <description>Reserved: request a link-layer acknowledgement (unicast only; not used by the estimator, which has its own ACK).</description>
+      </entry>
+    </enum>
+  </enums>
+  <messages>
+    <message id="42600" name="COOP_IMU_DELTA">
+      <description>FC to companion, 100 Hz. First stage of the IMU preintegration: raw (bias-uncorrected) increment over one sub-interval on a fixed grid aligned with the 100 ms knots, expressed in the sub-interval's start body frame. Consecutive messages must be contiguous (time_start_usec equals the previous end).</description>
+      <field type="uint64_t" name="time_start_usec" units="us">Sub-interval start, FC time.</field>
+      <field type="uint16_t" name="duration_us" units="us">Sub-interval length (10000 nominal).</field>
+      <field type="float[3]" name="delta_angle" units="rad">Rotation vector Log(Delta R) of the sub-interval (FRD body axes as ArduPilot's INS).</field>
+      <field type="float[3]" name="delta_velocity" units="m/s">Delta v in the start frame, gravity not removed.</field>
+      <field type="float[3]" name="delta_position" units="m">Delta p in the start frame, gravity not removed.</field>
+      <field type="uint16_t" name="samples">IMU samples integrated (accel + gyro).</field>
+      <field type="uint8_t" name="imu_instance">INS instance used.</field>
+      <field type="uint8_t" name="flags" enum="COOP_SAMPLE_FLAGS" display="bitmask">Status.</field>
+    </message>
+    <message id="42601" name="COOP_FLOW">
+      <description>FC to companion, per PMW3901 report (up to 100 Hz). Counts converted to angle with the FC's calibration.</description>
+      <field type="uint64_t" name="time_end_usec" units="us">End of the report's support.</field>
+      <field type="float" name="mid_before_end_us" units="us">Support end minus the width-weighted support midpoint.</field>
+      <field type="float" name="duration" units="s">Total support duration.</field>
+      <field type="float[2]" name="angle" units="rad">Angular displacement in calibrated sensor axes.</field>
+      <field type="float[3]" name="covariance">Upper triangle of the 2x2 angle covariance (rad^2).</field>
+      <field type="uint8_t" name="quality">PMW3901 SQUAL.</field>
+      <field type="uint8_t" name="flags" enum="COOP_SAMPLE_FLAGS" display="bitmask">Status.</field>
+    </message>
+    <message id="42602" name="COOP_TOF">
+      <description>FC to companion, per VL53L1X range (up to 50 Hz).</description>
+      <field type="uint64_t" name="time_end_usec" units="us">End of the ranging window.</field>
+      <field type="float" name="mid_before_end_us" units="us">Window end minus its midpoint.</field>
+      <field type="float" name="range" units="m">Range along the sensor axis.</field>
+      <field type="float" name="variance" units="m^2">Range variance.</field>
+      <field type="uint8_t" name="range_status">VL53L1X range status (0 = valid).</field>
+      <field type="uint8_t" name="flags" enum="COOP_SAMPLE_FLAGS" display="bitmask">Status.</field>
+    </message>
+    <message id="42603" name="COOP_BARO">
+      <description>FC to companion, per BMP388 pressure (up to 50 Hz). Raw pressure; the companion converts to altitude against its arming reference.</description>
+      <field type="uint64_t" name="time_end_usec" units="us">End of the conversion.</field>
+      <field type="float" name="mid_before_end_us" units="us">Conversion end minus its midpoint.</field>
+      <field type="float" name="pressure" units="Pa">Static pressure.</field>
+      <field type="float" name="variance" units="Pa^2">Pressure variance.</field>
+      <field type="float" name="temperature" units="degC">Sensor temperature (diagnostic).</field>
+      <field type="uint8_t" name="flags" enum="COOP_SAMPLE_FLAGS" display="bitmask">Status.</field>
+    </message>
+    <message id="42604" name="COOP_MAG">
+      <description>FC to companion, per MMC5983MA sample (up to 100 Hz). Calibrated field direction in the body frame with its tangent covariance (in the deterministic basis of the direction, hardware_models.direction_basis).</description>
+      <field type="uint64_t" name="time_usec" units="us">Capture time.</field>
+      <field type="uint16_t" name="end_after_capture_us" units="us">Support end minus capture time.</field>
+      <field type="float[3]" name="direction">Unit field direction, body frame.</field>
+      <field type="float[3]" name="covariance">Upper triangle of the 2x2 tangent covariance (rad^2).</field>
+      <field type="float" name="norm_ratio">Field norm over the surveyed norm.</field>
+      <field type="uint8_t" name="flags" enum="COOP_SAMPLE_FLAGS" display="bitmask">Status.</field>
+    </message>
+    <message id="42605" name="COOP_CAMERA">
+      <description>FC to companion, per fix of the FC-side marker frontend (assumed; the detector does not exist yet). Body pose in the map at the exposure, already converted from the camera frame.</description>
+      <field type="uint64_t" name="time_usec" units="us">Exposure (capture) time.</field>
+      <field type="uint32_t" name="receipt_after_capture_us" units="us">Time the fix became available on the FC, minus capture.</field>
+      <field type="uint32_t" name="end_after_capture_us" units="us">Support end (exposure end) minus capture.</field>
+      <field type="float[4]" name="q">Body-to-map rotation quaternion (w, x, y, z).</field>
+      <field type="float[3]" name="position" units="m">Body origin in the map.</field>
+      <field type="float[21]" name="covariance">Upper triangle of the 6x6 right-tangent covariance, order [rotation, translation].</field>
+      <field type="uint8_t" name="marker_id">Marker used (diagnostic).</field>
+      <field type="uint8_t" name="flags" enum="COOP_SAMPLE_FLAGS" display="bitmask">Status.</field>
+    </message>
+    <message id="42606" name="COOP_UWB">
+      <description>FC to companion, per DW1000 DS-TWR exchange this vehicle took part in, at both ends (the initiator learns the range from the responder's REPORT frame; required_changes.md, section 4).</description>
+      <field type="uint64_t" name="time_usec" units="us">Exchange start (initiator's POLL), FC time.</field>
+      <field type="uint16_t" name="end_after_capture_us" units="us">Exchange end (FINAL received) minus start.</field>
+      <field type="float" name="range" units="m">Antenna-delay-corrected range.</field>
+      <field type="float" name="variance" units="m^2">Range variance.</field>
+      <field type="float" name="rx_power" units="dBm">Total receive power of the FINAL frame.</field>
+      <field type="float" name="first_path_power" units="dBm">First-path power of the FINAL frame.</field>
+      <field type="uint8_t" name="initiator">System ID of the initiator.</field>
+      <field type="uint8_t" name="responder">System ID of the responder.</field>
+      <field type="uint8_t" name="flags" enum="COOP_SAMPLE_FLAGS" display="bitmask">Status.</field>
+    </message>
+    <message id="42607" name="COOP_PEER">
+      <description>Cooperative estimator message (M1, M2, ACK, STATE; the P4 wire layout, scripts/coop/runtime/messages.py) in both directions: companion to FC to mesh, and mesh to FC to companion. Critical mesh class: the FC transmits it ahead of every telemetry stream. Messages longer than one fragment (M2 reset, about 1.1 kB) are split; the receiving companion reassembles by (sender system ID, msg_seq).</description>
+      <field type="uint16_t" name="msg_seq">Per-sender message sequence; all fragments of one message share it.</field>
+      <field type="uint16_t" name="deadline_ms" units="ms">Freshness budget copied into the SwarmMesh header (0 = none). Frames older than this are dropped by relays.</field>
+      <field type="uint8_t" name="destination">Destination system ID, 0 = broadcast. Deliberately not named target_system: ArduPilot's MAVLink router would otherwise forward broadcast COOP_PEER frames to every other link (USB, telemetry).</field>
+      <field type="uint8_t" name="flags" enum="COOP_PEER_FLAGS" display="bitmask">Handling flags.</field>
+      <field type="uint8_t" name="fragment">Fragment index (low nibble) and fragment count minus one (high nibble).</field>
+      <field type="uint8_t" name="len">Bytes used in data.</field>
+      <field type="uint8_t[200]" name="data">Message bytes (MAVLink2 trims trailing zeros on the wire).</field>
+    </message>
+    <message id="42608" name="COOP_LINK_STATUS">
+      <description>FC to companion, 1 Hz. Health of the cooperative path, for the stale-state policy and bench diagnostics.</description>
+      <field type="uint64_t" name="time_usec" units="us">FC time.</field>
+      <field type="uint32_t" name="peer_tx">COOP_PEER frames put on the mesh.</field>
+      <field type="uint32_t" name="peer_rx">COOP_PEER frames received from the mesh and forwarded.</field>
+      <field type="uint16_t" name="peer_tx_dropped">COOP_PEER frames dropped on the FC (queue full, broadcast refused, deadline expired).</field>
+      <field type="uint16_t" name="peer_fwd_dropped">COOP_PEER frames not forwarded to the companion (UART full).</field>
+      <field type="uint16_t" name="uart_rx_errors">MAVLink parse errors on the companion port.</field>
+      <field type="uint8_t" name="critical_queue">Critical frames waiting now.</field>
+      <field type="uint8_t" name="critical_queue_max">Largest critical queue since the last report.</field>
+    </message>
+  </messages>
+</mavlink>
