@@ -51,7 +51,7 @@
       <description>FC to companion, 100 Hz. First stage of the IMU preintegration: raw (bias-uncorrected) increment over one sub-interval on a fixed grid aligned with the 100 ms knots, expressed in the sub-interval's start body frame. Consecutive messages must be contiguous (time_start_usec equals the previous end).</description>
       <field type="uint64_t" name="time_start_usec" units="us">Sub-interval start, FC time.</field>
       <field type="uint16_t" name="duration_us" units="us">Sub-interval length (10000 nominal).</field>
-      <field type="float[3]" name="delta_angle" units="rad">Rotation vector Log(Delta R) of the sub-interval (FRD body axes as ArduPilot's INS).</field>
+      <field type="float[3]" name="delta_angle" units="rad">Rotation vector Log(Delta R) of the sub-interval, in body FLU axes (x forward, y left, z up, as the estimator; the FC converts from its FRD INS).</field>
       <field type="float[3]" name="delta_velocity" units="m/s">Delta v in the start frame, gravity not removed.</field>
       <field type="float[3]" name="delta_position" units="m">Delta p in the start frame, gravity not removed.</field>
       <field type="uint16_t" name="samples">IMU samples integrated (accel + gyro).</field>
@@ -87,10 +87,10 @@
       <field type="uint8_t" name="flags" enum="COOP_SAMPLE_FLAGS" display="bitmask">Status.</field>
     </message>
     <message id="42604" name="COOP_MAG">
-      <description>FC to companion, per MMC5983MA sample (up to 100 Hz). Calibrated field direction in the body frame with its tangent covariance (in the deterministic basis of the direction, hardware_models.direction_basis).</description>
+      <description>FC to companion, per MMC5983MA sample (up to 100 Hz). Calibrated field direction in the body FLU frame with its tangent covariance (in the deterministic basis of the direction, hardware_models.direction_basis).</description>
       <field type="uint64_t" name="time_usec" units="us">Capture time.</field>
       <field type="uint16_t" name="end_after_capture_us" units="us">Support end minus capture time.</field>
-      <field type="float[3]" name="direction">Unit field direction, body frame.</field>
+      <field type="float[3]" name="direction">Unit field direction, body FLU frame.</field>
       <field type="float[3]" name="covariance">Upper triangle of the 2x2 tangent covariance (rad^2).</field>
       <field type="float" name="norm_ratio">Field norm over the surveyed norm.</field>
       <field type="uint8_t" name="flags" enum="COOP_SAMPLE_FLAGS" display="bitmask">Status.</field>
@@ -100,8 +100,8 @@
       <field type="uint64_t" name="time_usec" units="us">Exposure (capture) time.</field>
       <field type="uint32_t" name="receipt_after_capture_us" units="us">Time the fix became available on the FC, minus capture.</field>
       <field type="uint32_t" name="end_after_capture_us" units="us">Support end (exposure end) minus capture.</field>
-      <field type="float[4]" name="q">Body-to-map rotation quaternion (w, x, y, z).</field>
-      <field type="float[3]" name="position" units="m">Body origin in the map.</field>
+      <field type="float[4]" name="q">Body (FLU) to map (ENU) rotation quaternion (w, x, y, z).</field>
+      <field type="float[3]" name="position" units="m">Body origin in the map (ENU).</field>
       <field type="float[21]" name="covariance">Upper triangle of the 6x6 right-tangent covariance, order [rotation, translation].</field>
       <field type="uint8_t" name="marker_id">Marker used (diagnostic).</field>
       <field type="uint8_t" name="flags" enum="COOP_SAMPLE_FLAGS" display="bitmask">Status.</field>
