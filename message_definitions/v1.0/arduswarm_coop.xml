@@ -45,6 +45,30 @@
         <description>Reserved: request a link-layer acknowledgement (unicast only; not used by the estimator, which has its own ACK).</description>
       </entry>
     </enum>
+    <enum name="COOP_FIX_DOF" bitmask="true">
+      <description>Degrees of freedom of a COOP_GLOBAL_FIX. Valid combinations: POSITION|ATTITUDE, POSITION|YAW, POSITION.</description>
+      <entry value="1" name="COOP_FIX_POSITION">
+        <description>Body origin in the map (3 rows).</description>
+      </entry>
+      <entry value="2" name="COOP_FIX_ATTITUDE">
+        <description>Full attitude (3 rows, body right tangent).</description>
+      </entry>
+      <entry value="4" name="COOP_FIX_YAW">
+        <description>Heading about map up only (1 row); not combined with ATTITUDE.</description>
+      </entry>
+    </enum>
+    <enum name="COOP_FIX_SOURCE">
+      <description>Source of a COOP_GLOBAL_FIX (diagnostic; the estimator does not depend on it).</description>
+      <entry value="0" name="COOP_FIX_SOURCE_SIM">
+        <description>Simulated stand-in (SITL).</description>
+      </entry>
+      <entry value="1" name="COOP_FIX_SOURCE_MOCAP">
+        <description>Motion capture (OptiTrack), forwarded by AP_CoopBridge.</description>
+      </entry>
+      <entry value="2" name="COOP_FIX_SOURCE_MARKERS">
+        <description>Fiducial marker (PnP) frontend.</description>
+      </entry>
+    </enum>
   </enums>
   <messages>
     <message id="42600" name="COOP_IMU_DELTA">
@@ -95,15 +119,17 @@
       <field type="float" name="norm_ratio">Field norm over the surveyed norm.</field>
       <field type="uint8_t" name="flags" enum="COOP_SAMPLE_FLAGS" display="bitmask">Status.</field>
     </message>
-    <message id="42605" name="COOP_CAMERA">
-      <description>FC to companion, per fix of the FC-side marker frontend (assumed; the detector does not exist yet). Body pose in the map at the exposure, already converted from the camera frame.</description>
-      <field type="uint64_t" name="time_usec" units="us">Exposure (capture) time.</field>
+    <message id="42605" name="COOP_GLOBAL_FIX">
+      <description>FC to companion, per sparse global fix of this vehicle's body pose in the map, from any source (motion capture forwarded by AP_CoopBridge, a marker or onboard pose frontend). Already converted to the body origin and the ENU/FLU frames. Replaces COOP_CAMERA (docs/plans/p5_global_fix_plan.md).</description>
+      <field type="uint64_t" name="time_usec" units="us">Capture time (FC/mesh time).</field>
       <field type="uint32_t" name="receipt_after_capture_us" units="us">Time the fix became available on the FC, minus capture.</field>
-      <field type="uint32_t" name="end_after_capture_us" units="us">Support end (exposure end) minus capture.</field>
+      <field type="uint32_t" name="end_after_capture_us" units="us">Support end (exposure end) minus capture (0 for mocap).</field>
       <field type="float[4]" name="q">Body (FLU) to map (ENU) rotation quaternion (w, x, y, z).</field>
       <field type="float[3]" name="position" units="m">Body origin in the map (ENU).</field>
-      <field type="float[21]" name="covariance">Upper triangle of the 6x6 right-tangent covariance, order [rotation, translation].</field>
-      <field type="uint8_t" name="marker_id">Marker used (diagnostic).</field>
+      <field type="float[21]" name="covariance">Upper triangle of the 6x6 covariance, order [rotation (body right tangent), position (map)]. With COOP_FIX_YAW, entry (2,2) is the yaw variance.</field>
+      <field type="uint8_t" name="mask" enum="COOP_FIX_DOF" display="bitmask">Degrees of freedom the fix constrains: POSITION|ATTITUDE (6), POSITION|YAW (4) or POSITION (3).</field>
+      <field type="uint8_t" name="source" enum="COOP_FIX_SOURCE">Where the fix came from (diagnostic only).</field>
+      <field type="uint8_t" name="source_id">Rigid body or marker ID (diagnostic).</field>
       <field type="uint8_t" name="flags" enum="COOP_SAMPLE_FLAGS" display="bitmask">Status.</field>
     </message>
     <message id="42606" name="COOP_UWB">
